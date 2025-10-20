@@ -1,0 +1,64 @@
+# ============================================================================
+# REQUIREMENT TRACEABILITY
+# ============================================================================
+# Requirement ID: REQ-INFRA-001
+# User Story: Docker Compose configuration for PostgreSQL database
+# GxP Impact: YES - Database infrastructure for GxP-compliant data
+# Risk Level: HIGH
+# ============================================================================
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: session_analytics_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-session_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-session_password}
+      POSTGRES_DB: ${POSTGRES_DB:-session_analytics}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-session_user} -d ${POSTGRES_DB:-session_analytics}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - session_analytics_network
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: session_analytics_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@kavia.ai}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - session_analytics_network
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
+    driver: local
+    name: session_analytics_postgres_data
+  pgadmin_data:
+    driver: local
+    name: session_analytics_pgadmin_data
+
+networks:
+  session_analytics_network:
+    driver: bridge
+    name: session_analytics_network

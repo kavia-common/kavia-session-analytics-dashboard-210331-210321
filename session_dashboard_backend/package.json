@@ -8,7 +8,19 @@
     "dev": "nodemon server.js",
     "test": "jest --coverage --detectOpenHandles --forceExit",
     "test:watch": "jest --watch",
-    "migrate": "node src/migrations/runMigrations.js"
+    "migrate": "node src/migrations/runMigrations.js",
+    "db:start": "docker-compose up -d postgres",
+    "db:stop": "docker-compose stop postgres",
+    "db:restart": "docker-compose restart postgres",
+    "db:logs": "docker-compose logs -f postgres",
+    "db:shell": "docker-compose exec postgres psql -U session_user -d session_analytics",
+    "db:backup": "docker-compose exec postgres pg_dump -U session_user session_analytics > backup_$(date +%Y%m%d_%H%M%S).sql",
+    "db:reset": "docker-compose down -v && docker-compose up -d postgres && npm run migrate",
+    "db:validate": "node scripts/validate-database-setup.js",
+    "db:status": "node scripts/show-database-status.js",
+    "db:test-e2e": "bash scripts/test-database-e2e.sh",
+    "pgadmin:start": "docker-compose up -d pgadmin",
+    "pgadmin:stop": "docker-compose stop pgadmin"
   },
   "keywords": [
     "analytics",

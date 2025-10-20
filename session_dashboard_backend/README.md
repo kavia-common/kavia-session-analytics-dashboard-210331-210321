@@ -30,9 +30,16 @@ cp .env.example .env
 # Edit .env file with your configuration
 # IMPORTANT: Set DATABASE_URL and JWT_SECRET
 
+# Start PostgreSQL with Docker Compose (recommended)
+npm run db:start
+
 # Run database migrations
 npm run migrate
 ```
+
+For detailed database setup instructions, see:
+- **[QUICKSTART_DATABASE.md](./QUICKSTART_DATABASE.md)** - 5-minute setup guide
+- **[README_DATABASE.md](./README_DATABASE.md)** - Complete database documentation
 
 ## Environment Variables
 
@@ -108,13 +115,52 @@ npm test
 npm run test:watch
 ```
 
-## Database Migrations
+## Database
 
-Database migrations are located in `src/migrations/`. To run migrations:
+This project uses PostgreSQL for data storage with a comprehensive migration system and GxP-compliant features.
+
+### Quick Setup
 
 ```bash
+# Start PostgreSQL with Docker Compose
+npm run db:start
+
+# Run migrations
 npm run migrate
+
+# Access database shell
+npm run db:shell
 ```
+
+### Documentation
+
+- **[QUICKSTART_DATABASE.md](./QUICKSTART_DATABASE.md)** - 5-minute setup guide
+- **[README_DATABASE.md](./README_DATABASE.md)** - Complete database documentation
+- **[DATABASE_IMPLEMENTATION_SUMMARY.md](./DATABASE_IMPLEMENTATION_SUMMARY.md)** - Implementation overview
+- **[DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md)** - Production deployment guide
+
+### Database Commands
+
+```bash
+npm run db:start        # Start PostgreSQL
+npm run db:stop         # Stop PostgreSQL
+npm run db:restart      # Restart PostgreSQL
+npm run db:logs         # View logs
+npm run db:shell        # Access PostgreSQL CLI
+npm run db:backup       # Backup database
+npm run db:reset        # Reset database (WARNING: deletes all data)
+npm run db:validate     # Validate database setup
+npm run migrate         # Run migrations
+```
+
+### Schema Overview
+
+- **10 tables**: users, teams, sessions, features, roles, audit_logs, electronic_signatures, export_logs, role_change_logs, migrations
+- **77+ indexes**: Optimized for query performance
+- **GxP Compliant**: ALCOA+ audit trail, 21 CFR Part 11 electronic signatures
+- **Docker Compose**: Easy setup with persistent volumes
+
+See [README_DATABASE.md](./README_DATABASE.md) for complete schema documentation.
 
 ## Default Credentials
 

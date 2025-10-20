@@ -2,182 +2,233 @@
 // REQUIREMENT TRACEABILITY
 // ============================================================================
 // Requirement ID: REQ-DB-002
-// User Story: Database migration runner
+// User Story: Database migration runner with SQL file support
 // GxP Impact: YES - Database schema for GxP data
 // Risk Level: HIGH
 // ============================================================================
 
+const fs = require('fs').promises;
+const path = require('path');
+const crypto = require('crypto');
 const { connectDatabase, query, closeDatabase } = require('../config/database');
 
-// Migration scripts
-const migrations = [
-  {
-    id: 1,
-    name: 'Create users table',
-    up: `
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        role VARCHAR(20) NOT NULL CHECK (role IN ('Admin', 'Manager', 'Engineer', 'Viewer')),
-        team_id INTEGER,
-        is_active BOOLEAN DEFAULT true,
-        last_login TIMESTAMP,
-        created_at TIMESTAMP DEFAULT NOW(),
-        updated_at TIMESTAMP DEFAULT NOW()
-      );
-      
-      CREATE INDEX idx_users_username ON users(username);
-      CREATE INDEX idx_users_email ON users(email);
-      CREATE INDEX idx_users_role ON users(role);
-    `
-  },
-  {
-    id: 2,
-    name: 'Create audit_trail table',
-    up: `
-      CREATE TABLE IF NOT EXISTS audit_trail (
-        id SERIAL PRIMARY KEY,
-        timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
-        user_id INTEGER REFERENCES users(id),
-        username VARCHAR(50) NOT NULL,
-        action_type VARCHAR(20) NOT NULL,
-        resource VARCHAR(255) NOT NULL,
-        details JSONB,
-        ip_address VARCHAR(45),
-        user_agent TEXT,
-        status_code INTEGER,
-        duration_ms INTEGER
-      );
-      
-      CREATE INDEX idx_audit_timestamp ON audit_trail(timestamp);
-      CREATE INDEX idx_audit_user_id ON audit_trail(user_id);
-      CREATE INDEX idx_audit_action_type ON audit_trail(action_type);
-    `
-  },
-  {
-    id: 3,
-    name: 'Create electronic_signatures table',
-    up: `
-      CREATE TABLE IF NOT EXISTS electronic_signatures (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        username VARCHAR(50) NOT NULL,
-        signature_text VARCHAR(255) NOT NULL,
-        action_type VARCHAR(50) NOT NULL,
-        timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
-        ip_address VARCHAR(45)
-      );
-      
-      CREATE INDEX idx_signatures_user_id ON electronic_signatures(user_id);
-      CREATE INDEX idx_signatures_timestamp ON electronic_signatures(timestamp);
-    `
-  },
-  {
-    id: 4,
-    name: 'Create export_log table',
-    up: `
-      CREATE TABLE IF NOT EXISTS export_log (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        username VARCHAR(50) NOT NULL,
-        export_format VARCHAR(10) NOT NULL,
-        is_signed BOOLEAN DEFAULT false,
-        signature_id INTEGER REFERENCES electronic_signatures(id),
-        timestamp TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-      
-      CREATE INDEX idx_export_log_user_id ON export_log(user_id);
-      CREATE INDEX idx_export_log_timestamp ON export_log(timestamp);
-    `
-  },
-  {
-    id: 5,
-    name: 'Create role_change_log table',
-    up: `
-      CREATE TABLE IF NOT EXISTS role_change_log (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id),
-        new_role VARCHAR(20) NOT NULL,
-        changed_by INTEGER NOT NULL REFERENCES users(id),
-        timestamp TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-      
-      CREATE INDEX idx_role_change_user_id ON role_change_log(user_id);
-      CREATE INDEX idx_role_change_timestamp ON role_change_log(timestamp);
-    `
-  },
-  {
-    id: 6,
-    name: 'Create migrations table',
-    up: `
-      CREATE TABLE IF NOT EXISTS migrations (
-        id INTEGER PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        applied_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `
-  },
-  {
-    id: 7,
-    name: 'Insert default admin user',
-    up: `
-      INSERT INTO users (username, email, password_hash, role)
-      VALUES (
-        'admin',
-        'admin@kavia.ai',
-        '$2b$10$rQZYvJfE7KxqQqG5FqP2ZeZGZ8XqJ9k5mZl3KqYvJ5xP2qG5FqP2Ze',
-        'Admin'
-      )
-      ON CONFLICT (username) DO NOTHING;
-    `
-  }
-];
+// PUBLIC_INTERFACE
+/**
+ * Calculate SHA256 checksum of file content
+ * @param {string} content - File content
+ * @returns {string} SHA256 hash
+ */
+function calculateChecksum(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
 
-// Run migrations
-const runMigrations = async () => {
+// PUBLIC_INTERFACE
+/**
+ * Read and parse SQL migration files from directory
+ * @returns {Promise<Array>} Array of migration objects
+ */
+async function loadMigrationFiles() {
+  const migrationsDir = path.join(__dirname, '../../sql/migrations');
+  
   try {
-    console.log('🔄 Starting database migrations...');
+    const files = await fs.readdir(migrationsDir);
+    const sqlFiles = files.filter(f => f.endsWith('.sql')).sort();
+    
+    const migrations = await Promise.all(
+      sqlFiles.map(async (filename) => {
+        const filePath = path.join(migrationsDir, filename);
+        const content = await fs.readFile(filePath, 'utf8');
+        const match = filename.match(/^(\d+)_(.+)\.sql$/);
+        
+        if (!match) {
+          console.warn(`⚠️  Skipping file with invalid name format: ${filename}`);
+          return null;
+        }
+        
+        const [, idStr, name] = match;
+        return {
+          id: parseInt(idStr, 10),
+          name: name.replace(/_/g, ' '),
+          filename,
+          content,
+          checksum: calculateChecksum(content)
+        };
+      })
+    );
+    
+    return migrations.filter(m => m !== null);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log('📁 No SQL migrations directory found, using embedded migrations');
+      return [];
+    }
+    throw error;
+  }
+}
+
+// PUBLIC_INTERFACE
+/**
+ * Run SQL migration with timing
+ * @param {Object} migration - Migration object
+ * @returns {Promise<number>} Execution time in milliseconds
+ */
+async function runMigration(migration) {
+  const startTime = Date.now();
+  
+  try {
+    // Split by semicolon and execute each statement
+    const statements = migration.content
+      .split(';')
+      .map(s => s.trim())
+      .filter(s => s.length > 0 && !s.startsWith('--'));
+    
+    for (const statement of statements) {
+      await query(statement);
+    }
+    
+    const executionTime = Date.now() - startTime;
+    
+    // Record migration
+    await query(
+      `INSERT INTO migrations (id, name, filename, checksum, execution_time_ms, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         checksum = EXCLUDED.checksum,
+         execution_time_ms = EXCLUDED.execution_time_ms`,
+      [migration.id, migration.name, migration.filename, migration.checksum, executionTime, 'success']
+    );
+    
+    return executionTime;
+  } catch (error) {
+    const executionTime = Date.now() - startTime;
+    
+    // Record failed migration
+    await query(
+      `INSERT INTO migrations (id, name, filename, checksum, execution_time_ms, status)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
+      [migration.id, migration.name, migration.filename, migration.checksum, executionTime, 'failed']
+    );
+    
+    throw error;
+  }
+}
+
+// PUBLIC_INTERFACE
+/**
+ * Main migration runner function
+ */
+async function runMigrations() {
+  try {
+    console.log('🔄 Starting database migrations...\n');
     
     await connectDatabase();
 
-    // Create migrations table if it doesn't exist
-    await query(migrations[5].up);
+    // First, ensure migrations table exists
+    await query(`
+      CREATE TABLE IF NOT EXISTS migrations (
+        id INTEGER PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        filename VARCHAR(255),
+        checksum VARCHAR(64),
+        applied_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        applied_by VARCHAR(100) DEFAULT CURRENT_USER,
+        execution_time_ms INTEGER,
+        status VARCHAR(20) DEFAULT 'success' CHECK (status IN ('success', 'failed', 'rolled_back'))
+      )
+    `);
+
+    // Load migration files
+    const migrations = await loadMigrationFiles();
+    
+    if (migrations.length === 0) {
+      console.log('ℹ️  No migration files found');
+      await closeDatabase();
+      process.exit(0);
+    }
 
     // Check which migrations have been applied
-    const appliedResult = await query('SELECT id FROM migrations');
-    const appliedIds = appliedResult.rows.map(row => row.id);
+    const appliedResult = await query('SELECT id, checksum FROM migrations WHERE status = $1', ['success']);
+    const appliedMigrations = new Map(
+      appliedResult.rows.map(row => [row.id, row.checksum])
+    );
+
+    let appliedCount = 0;
+    let skippedCount = 0;
 
     // Run pending migrations
     for (const migration of migrations) {
-      if (migration.id === 6) continue; // Skip migrations table creation
-
-      if (appliedIds.includes(migration.id)) {
-        console.log(`⏭️  Skipping migration ${migration.id}: ${migration.name} (already applied)`);
+      const appliedChecksum = appliedMigrations.get(migration.id);
+      
+      if (appliedChecksum) {
+        if (appliedChecksum === migration.checksum) {
+          console.log(`⏭️  Skipping migration ${migration.id}: ${migration.name} (already applied)`);
+          skippedCount++;
+        } else {
+          console.warn(`⚠️  WARNING: Migration ${migration.id} checksum changed!`);
+          console.warn(`   Previous: ${appliedChecksum}`);
+          console.warn(`   Current:  ${migration.checksum}`);
+          console.warn(`   Skipping to avoid data corruption...`);
+          skippedCount++;
+        }
         continue;
       }
 
       console.log(`🔄 Running migration ${migration.id}: ${migration.name}`);
       
-      await query(migration.up);
-      await query(
-        'INSERT INTO migrations (id, name) VALUES ($1, $2)',
-        [migration.id, migration.name]
-      );
+      const executionTime = await runMigration(migration);
       
-      console.log(`✅ Migration ${migration.id} completed`);
+      console.log(`✅ Migration ${migration.id} completed in ${executionTime}ms\n`);
+      appliedCount++;
     }
 
-    console.log('✅ All migrations completed successfully');
-    
+    console.log('\n' + '='.repeat(60));
+    console.log(`✅ Migration summary:`);
+    console.log(`   Applied: ${appliedCount}`);
+    console.log(`   Skipped: ${skippedCount}`);
+    console.log(`   Total:   ${migrations.length}`);
+    console.log('='.repeat(60) + '\n');
+
+    // Run seed data if no sessions exist (fresh database)
+    const sessionsCount = await query('SELECT COUNT(*) as count FROM sessions');
+    if (sessionsCount.rows[0].count === '0') {
+      console.log('🌱 Running seed data...\n');
+      const seedPath = path.join(__dirname, '../../sql/seeds/seed_data.sql');
+      try {
+        const seedContent = await fs.readFile(seedPath, 'utf8');
+        const seedStatements = seedContent
+          .split(';')
+          .map(s => s.trim())
+          .filter(s => s.length > 0 && !s.startsWith('--'));
+        
+        for (const statement of seedStatements) {
+          await query(statement);
+        }
+        console.log('✅ Seed data completed\n');
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          console.log('ℹ️  No seed data file found, skipping...\n');
+        } else {
+          throw error;
+        }
+      }
+    }
+
     await closeDatabase();
+    console.log('✅ All migrations completed successfully\n');
     process.exit(0);
   } catch (error) {
-    console.error('❌ Migration failed:', error);
+    console.error('❌ Migration failed:', error.message);
+    console.error(error.stack);
     await closeDatabase();
     process.exit(1);
   }
-};
+}
 
-runMigrations();
+// Run migrations if called directly
+if (require.main === module) {
+  runMigrations();
+}
+
+module.exports = { runMigrations, loadMigrationFiles };

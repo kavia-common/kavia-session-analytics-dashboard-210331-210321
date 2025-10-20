@@ -1,0 +1,41 @@
+# Node modules
+node_modules/
+npm-debug.log
+
+# Environment files (should be configured separately)
+.env
+.env.local
+.env.*.local
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Backups
+*.sql
+*.dump
+backup*/
