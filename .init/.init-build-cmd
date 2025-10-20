@@ -1,0 +1,4 @@
+{
+    "command": "npm install && npx tsc --noEmit && npm test -- --ci",
+    "working_directory": "/home/kavia/workspace/code-generation/kavia-session-analytics-dashboard-210331-210321/session_dashboard_frontend"
+}

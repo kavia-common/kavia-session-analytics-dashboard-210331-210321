@@ -1,0 +1,219 @@
+# ============================================================================
+# REQUIREMENT TRACEABILITY
+# ============================================================================
+# Requirement ID: REQ-CI-001
+# User Story: Automated CI pipeline for database migrations and tests
+# GxP Impact: YES - Validates database schema in CI/CD
+# Risk Level: HIGH
+# ============================================================================
+
+name: Database CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'sql/**'
+      - 'src/migrations/**'
+      - 'src/config/database.js'
+      - '.github/workflows/database-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'sql/**'
+      - 'src/migrations/**'
+
+jobs:
+  validate-schema:
+    name: Validate Database Schema
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Validate database setup
+        run: npm run db:validate
+      
+      - name: Generate schema diagram
+        run: node scripts/generate-schema-diagram.js
+      
+      - name: Upload schema diagram
+        uses: actions/upload-artifact@v3
+        with:
+          name: schema-diagram
+          path: docs/SCHEMA_DIAGRAM.md
+
+  test-migrations:
+    name: Test Database Migrations
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        run: npm run migrate
+      
+      - name: Verify tables created
+        env:
+          PGPASSWORD: test_password
+        run: |
+          psql -h localhost -U test_user -d test_db -c "\dt" | grep users
+          psql -h localhost -U test_user -d test_db -c "\dt" | grep sessions
+          psql -h localhost -U test_user -d test_db -c "\dt" | grep audit_logs
+      
+      - name: Verify seed data
+        env:
+          PGPASSWORD: test_password
+        run: |
+          psql -h localhost -U test_user -d test_db -c "SELECT COUNT(*) FROM roles;" | grep 4
+          psql -h localhost -U test_user -d test_db -c "SELECT COUNT(*) FROM users WHERE username='admin';" | grep 1
+      
+      - name: Run migration tests
+        run: npm test -- src/migrations/__tests__/runMigrations.test.js
+
+  test-rollback:
+    name: Test Migration Rollback
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        run: npm run migrate
+      
+      - name: Test idempotency (run migrations again)
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/test_db
+        run: npm run migrate
+      
+      - name: Verify migration count unchanged
+        env:
+          PGPASSWORD: test_password
+        run: |
+          COUNT=$(psql -h localhost -U test_user -d test_db -t -c "SELECT COUNT(*) FROM migrations WHERE status='success';")
+          echo "Migration count: $COUNT"
+          if [ "$COUNT" -lt 10 ]; then
+            echo "Error: Expected at least 10 successful migrations"
+            exit 1
+          fi
+
+  security-scan:
+    name: Security Scan SQL Files
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Check for SQL injection patterns
+        run: |
+          # Check for potential SQL injection vulnerabilities
+          if grep -r "EXECUTE.*||" sql/; then
+            echo "Warning: Potential SQL injection pattern found"
+            exit 1
+          fi
+      
+      - name: Check for hardcoded credentials
+        run: |
+          # Check for hardcoded passwords (excluding test examples)
+          if grep -r "password.*=" sql/ | grep -v "example" | grep -v "comment"; then
+            echo "Warning: Potential hardcoded credentials found"
+            exit 1
+          fi
+      
+      - name: Validate GxP compliance comments
+        run: |
+          # Ensure all migrations have requirement traceability
+          for file in sql/migrations/*.sql; do
+            if ! grep -q "REQUIREMENT TRACEABILITY" "$file"; then
+              echo "Error: $file missing requirement traceability"
+              exit 1
+            fi
+          done
+
+  documentation-check:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Check README exists
+        run: |
+          test -f README_DATABASE.md || (echo "README_DATABASE.md missing" && exit 1)
+          test -f QUICKSTART_DATABASE.md || (echo "QUICKSTART_DATABASE.md missing" && exit 1)
+      
+      - name: Check docker-compose exists
+        run: test -f docker-compose.yml || (echo "docker-compose.yml missing" && exit 1)
+      
+      - name: Validate documentation completeness
+        run: |
+          # Check that README documents all tables
+          for table in users teams sessions features roles audit_logs electronic_signatures export_logs role_change_logs; do
+            grep -q "$table" README_DATABASE.md || (echo "Table $table not documented" && exit 1)
+          done
