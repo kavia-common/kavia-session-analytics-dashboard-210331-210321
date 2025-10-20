@@ -1,0 +1,103 @@
+# ============================================================================
+# REQUIREMENT TRACEABILITY
+# ============================================================================
+# Requirement ID: REQ-INFRA-002
+# User Story: Root-level Docker Compose orchestration for full-stack application
+# Acceptance Criteria:
+#   - Frontend accessible on port 3000
+#   - Backend accessible on port 5000
+#   - PostgreSQL accessible on port 5432
+#   - Services properly networked and dependent
+# GxP Impact: YES - Infrastructure for GxP-compliant system
+# Risk Level: HIGH
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: session_analytics_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-session_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-session_password}
+      POSTGRES_DB: ${POSTGRES_DB:-session_analytics}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./session_dashboard_backend/sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-session_user} -d ${POSTGRES_DB:-session_analytics}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - session_analytics_network
+
+  # Backend API
+  backend:
+    build:
+      context: ./session_dashboard_backend
+      dockerfile: Dockerfile
+    container_name: session_analytics_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 5000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-session_user}:${POSTGRES_PASSWORD:-session_password}@postgres:5432/${POSTGRES_DB:-session_analytics}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_EXPIRY: ${JWT_EXPIRY:-1h}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+    ports:
+      - "${BACKEND_PORT:-5000}:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - session_analytics_network
+    volumes:
+      - ./session_dashboard_backend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # Frontend Application
+  frontend:
+    build:
+      context: ./session_dashboard_frontend
+      dockerfile: Dockerfile
+    container_name: session_analytics_frontend
+    restart: unless-stopped
+    environment:
+      REACT_APP_API_BASE_URL: ${REACT_APP_API_BASE_URL:-http://localhost:5000/api}
+      REACT_APP_SITE_URL: ${REACT_APP_SITE_URL:-http://localhost:3000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+    networks:
+      - session_analytics_network
+    volumes:
+      - ./session_dashboard_frontend:/app
+      - /app/node_modules
+    stdin_open: true
+    tty: true
+    command: npm start
+
+volumes:
+  postgres_data:
+    driver: local
+    name: session_analytics_postgres_data
+
+networks:
+  session_analytics_network:
+    driver: bridge
+    name: session_analytics_network

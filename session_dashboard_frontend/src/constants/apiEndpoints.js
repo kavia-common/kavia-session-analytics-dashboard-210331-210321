@@ -17,6 +17,9 @@
  * @constant {Object}
  */
 export const API_ENDPOINTS = {
+  // Health check
+  HEALTH: '/health',
+  
   // Authentication endpoints
   AUTH: {
     LOGIN: '/auth/login',

@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "test": "jest --coverage --detectOpenHandles --forceExit",
     "test:watch": "jest --watch",
+    "test:integration": "jest --testMatch='**/*.integration.test.js' --runInBand",
     "migrate": "node src/migrations/runMigrations.js",
     "db:start": "docker-compose up -d postgres",
     "db:stop": "docker-compose stop postgres",
@@ -20,7 +21,10 @@
     "db:status": "node scripts/show-database-status.js",
     "db:test-e2e": "bash scripts/test-database-e2e.sh",
     "pgadmin:start": "docker-compose up -d pgadmin",
-    "pgadmin:stop": "docker-compose stop pgadmin"
+    "pgadmin:stop": "docker-compose stop pgadmin",
+    "docker:up": "cd .. && docker-compose up -d",
+    "docker:down": "cd .. && docker-compose down",
+    "docker:logs": "cd .. && docker-compose logs -f"
   },
   "keywords": [
     "analytics",

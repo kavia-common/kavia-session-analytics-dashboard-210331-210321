@@ -4,15 +4,11 @@ npm-debug.log
 .env.local
 .git
 .gitignore
-coverage
+build
 .DS_Store
 *.md
 Dockerfile
 .dockerignore
-test
-tests
-__tests__
-*.test.js
-*.spec.js
+coverage
 .vscode
 .idea
